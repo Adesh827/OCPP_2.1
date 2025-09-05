@@ -2,6 +2,7 @@
   "name": "ocpp_2.1",
   "version": "1.0.0",
   "description": "ocpp server",
+  "type": "module",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
@@ -10,6 +11,8 @@
   "license": "ISC",
   "dependencies": {
     "express": "^5.1.0",
+    "fs": "^0.0.1-security",
+    "https": "^1.0.0",
     "ws": "^8.18.3"
   }
 }

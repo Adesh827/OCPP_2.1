@@ -1,16 +1,33 @@
+import fs from "fs";
+import https from "https";
 import express, { response } from "express";
 import { WebSocketServer } from "ws";
 let port=8080;
 const app=express();
 
-const server=app.listen(port, ()=>{
-    console.log("app is lisning on port",port);
-})
 
-const wss= new WebSocketServer({server});
+const serverOptions = {
+  key: fs.readFileSync("./certs/server.key"),
+  cert: fs.readFileSync("./certs/server.crt"),
+  ca: fs.readFileSync("./certs/ca.crt"),
+  requestCert: true,
+  rejectUnauthorized: false
+}
+const httpsServer = https.createServer(serverOptions, app);
 
-wss.on("connection",(ws)=>{
-   console.log('Charge Point connected');
+const wss = new WebSocketServer({ server: httpsServer });
+
+
+wss.on("connection",(ws,req)=>{
+    const cert = req.socket.getPeerCertificate();
+  
+  if (req.client.authorized) {
+    console.log("✅ Client authenticated:", cert.subject.CN);
+    ws.send("Hello, secure WebSocket client!"); 
+  } else {
+    console.log("❌ Unauthorized client:", req.client.authorizationError);
+    ws.terminate();
+  }
 
     ws.on('message', message => {
         console.log(`Received message from Charge Point: ${message}`);
@@ -35,4 +52,9 @@ wss.on("connection",(ws)=>{
 
     })
 
+});
+
+httpsServer.listen(port, () => {
+  console.log(`HTTPS + Express running on https://localhost:${port}`);
+  console.log(`🔐 WebSocket running on wss://localhost:${port}`);
 });
