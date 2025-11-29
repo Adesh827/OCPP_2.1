@@ -1,60 +1,57 @@
-import fs from "fs";
-import https from "https";
-import express, { response } from "express";
+import express from "express";
+import http from "http";
 import { WebSocketServer } from "ws";
-let port=8080;
-const app=express();
 
+const app = express();
+const PORT = process.env.PORT || 8080;     // Render uses environment PORT
 
-const serverOptions = {
-  key: fs.readFileSync("./certs/server.key"),
-  cert: fs.readFileSync("./certs/server.crt"),
-  ca: fs.readFileSync("./certs/ca.crt"),
-  requestCert: true,
-  rejectUnauthorized: false
-}
-const httpsServer = https.createServer(serverOptions, app);
-
-const wss = new WebSocketServer({ server: httpsServer });
-
-
-wss.on("connection",(ws,req)=>{
-    const cert = req.socket.getPeerCertificate();
-  
-  if (req.client.authorized) {
-    console.log("✅ Client authenticated:", cert.subject.CN);
-    ws.send("Hello, secure WebSocket client!"); 
-  } else {
-    console.log("❌ Unauthorized client:", req.client.authorizationError);
-    ws.terminate();
-  }
-
-    ws.on('message', message => {
-        console.log(`Received message from Charge Point: ${message}`);
-        try {
-            const ocppMessage = JSON.parse(message);
-            if (ocppMessage[2] === 'BootNotification') {
-                const chargePointId = ocppMessage[3].chargePointVendor; 
-                console.log(`BootNotification from: ${chargePointId}`);
-                const response = [3, ocppMessage[1], {
-                    "currentTime": new Date().toISOString(),
-                    "interval": 300,
-                    "status": "Accepted"
-                }];
-                ws.send(JSON.stringify(response));
-                console.log('Sent BootNotificationResponse');
-            } else {
-                console.log('Unhandled OCPP message type');
-            }
-        } catch (error) {
-            console.error('Error parsing message:', error);
-        }
-
-    })
-
+app.get("/", (req, res) => {
+  res.send("OCPP WebSocket server running");
 });
 
-httpsServer.listen(port, () => {
-  console.log(`HTTPS + Express running on https://localhost:${port}`);
-  console.log(`🔐 WebSocket running on wss://localhost:${port}`);
+// HTTP server (not HTTPS, Render terminates TLS)
+const server = http.createServer(app);
+
+// WebSocket server attached to HTTP server
+const wss = new WebSocketServer({ server });
+
+wss.on("connection", (ws, req) => {
+  console.log("🔌 Charge Point connected:", req.url);
+
+  ws.on("message", (message) => {
+    console.log("📩 Received:", message.toString());
+
+    let ocpp;
+    try {
+      ocpp = JSON.parse(message);
+    } catch {
+      console.log("❌ Not a valid OCPP JSON frame");
+      return;
+    }
+
+    const [messageType, messageId, action, payload] = ocpp;
+
+    // 2 = CALL (BootNotification etc.)
+    if (messageType === 2 && action === "BootNotification") {
+      console.log("🚗 BootNotification received");
+      const response = [
+        3,
+        messageId,
+        {
+          currentTime: new Date().toISOString(),
+          interval: 60,
+          status: "Accepted"
+        }
+      ];
+      ws.send(JSON.stringify(response));
+      console.log("📤 BootNotificationResponse sent");
+    }
+  });
+
+  ws.on("close", () => console.log("🔌 Charge Point disconnected"));
+});
+
+server.listen(PORT, () => {
+  console.log(`🌐 Web server running on port ${PORT}`);
+  console.log(`🔋 WebSocket OCPP endpoint ready at wss://<render-domain>/CP01`);
 });
