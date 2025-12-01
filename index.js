@@ -25,7 +25,7 @@ wss.on("connection", (ws, req) => {
     try {
       ocpp = JSON.parse(message);
     } catch {
-      console.log("❌ Not a valid OCPP JSON frame");
+      console.log(" Not a valid OCPP JSON frame");
       return;
     }
 
@@ -33,13 +33,13 @@ wss.on("connection", (ws, req) => {
 
     // 2 = CALL (BootNotification etc.)
     if (messageType === 2 && action === "BootNotification") {
-      console.log("🚗 BootNotification received");
+      console.log(" BootNotification received");
       const response = [
         3,
         messageId,
         {
           currentTime: new Date().toISOString(),
-          interval: 60,
+          interval: 50,
           status: "Accepted"
         }
       ];
