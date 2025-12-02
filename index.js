@@ -34,7 +34,7 @@ wss.on("connection", (ws, req) => {
     // 2 = CALL (BootNotification etc.)
     if (messageType === 2 && action === "BootNotification") {
       console.log(" BootNotification received");
-      const response = [
+      let response = [
         3,
         messageId,
         {
@@ -47,9 +47,9 @@ wss.on("connection", (ws, req) => {
       console.log("📤 BootNotificationResponse sent");
     }
 
-    if(messageType===2 & action ==="Heartbeat"){
+    else if(messageType===2 & action ==="Heartbeat"){
       console.log("Heartbeat accepted");
-      const response = [
+      let response = [
         3,
         messageId,
         {
