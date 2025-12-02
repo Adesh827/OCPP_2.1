@@ -60,7 +60,7 @@ wss.on("connection", (ws, req) => {
       ws.send(JSON.stringify(response));
       console.log(" BootNotificationResponse sent");
     }
-    
+
     if(messageType===2 & action ==="Heartbeat"){
       console.log("Heartbeat accepted");
       const response = [
@@ -74,6 +74,16 @@ wss.on("connection", (ws, req) => {
       console.log(" Heartbeat sent");
 
     }
+    else{
+      const response=[
+        3,
+        messageId,{
+          default:"Hiiii"
+        }
+      ]
+      ws.send(JSON.stringify(response));
+    }
+
   });
 
   ws.on("close", () => console.log("🔌 Charge Point disconnected"));
