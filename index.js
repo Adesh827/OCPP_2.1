@@ -46,20 +46,6 @@ wss.on("connection", (ws, req) => {
       ws.send(JSON.stringify(response));
       console.log("📤 BootNotificationResponse sent");
     }
-    if (messageType === 2 && action === "BootNotification") {
-      console.log(" BootNotification received");
-      const response = [
-        3,
-        messageId,
-        {
-          currentTime: new Date().toISOString(),
-          interval: 50,
-          status: "Accepted"
-        }
-      ];
-      ws.send(JSON.stringify(response));
-      console.log(" BootNotificationResponse sent");
-    }
 
     if(messageType===2 & action ==="Heartbeat"){
       console.log("Heartbeat accepted");
