@@ -16,10 +16,10 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
 wss.on("connection", (ws, req) => {
-  console.log("🔌 Charge Point connected:", req.url);
+  console.log("Charge Point connected:", req.url);
 
   ws.on("message", (message) => {
-    console.log("📩 Received:", message.toString());
+    console.log("Received:", message.toString());
 
     let ocpp;
     try {
@@ -44,7 +44,7 @@ wss.on("connection", (ws, req) => {
         }
       ];
       ws.send(JSON.stringify(response));
-      console.log("📤 BootNotificationResponse sent");
+      console.log(" BootNotificationResponse sent");
     }
 
     else if(messageType===2 & action ==="Heartbeat"){
@@ -76,6 +76,6 @@ wss.on("connection", (ws, req) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`🌐 Web server running on port ${PORT}`);
-  console.log(`🔋 WebSocket OCPP endpoint ready at wss://<render-domain>/CP01`);
+  console.log(`Web server running on port ${PORT}`);
+  console.log(`WebSocket OCPP endpoint ready at wss://<render-domain>/CP01`);
 });
