@@ -7,6 +7,12 @@
   "scripts": {
     "start": "node index.js",
     "simulate": "node simulator.js",
+    "simulate2": "node simulator2.js",
+    "multi-test": "node multi-charger-test.js",
+    "populate": "node populate-data.js",
+    "check-db": "node check-db.js",
+    "verify-charts": "node verify-charts.js",
+    "clear-db": "node clear-db.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "",

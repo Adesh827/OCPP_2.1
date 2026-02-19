@@ -187,21 +187,64 @@ function simulateChargingSession() {
   
   ws.on('message', (data) => {
     const msg = JSON.parse(data);
-    const [messageType, msgId, payload] = msg;
+    const [messageType, msgId, actionOrPayload, payload] = msg;
     
-    if (messageType === 3) { // CallResult
+    if (messageType === 2) { // CALL (incoming request from server)
+      const action = actionOrPayload;
+      console.log(`\n← Received CALL: ${action}`);
+      console.log(`   Payload:`, JSON.stringify(payload, null, 2));
+      
+      if (action === 'RemoteStartTransaction') {
+        console.log('   🎯 Processing RemoteStartTransaction...');
+        // Send CALLRESULT
+        const response = [3, msgId, { status: 'Accepted' }];
+        ws.send(JSON.stringify(response));
+        console.log('   → Sent CALLRESULT: Accepted');
+        
+        // Simulate starting the transaction
+        setTimeout(() => {
+          console.log('   🚗 Auto-starting transaction due to remote command...');
+          sendMessage('StartTransaction', {
+            connectorId: payload.connectorId,
+            idTag: payload.idTag,
+            meterStart: 0,
+            timestamp: new Date().toISOString()
+          });
+        }, 1000);
+        
+      } else if (action === 'RemoteStopTransaction') {
+        console.log('   🎯 Processing RemoteStopTransaction...');
+        // Send CALLRESULT
+        const response = [3, msgId, { status: 'Accepted' }];
+        ws.send(JSON.stringify(response));
+        console.log('   → Sent CALLRESULT: Accepted');
+        
+        // Simulate stopping the transaction
+        setTimeout(() => {
+          console.log('   🛑 Auto-stopping transaction due to remote command...');
+          sendMessage('StopTransaction', {
+            transactionId: payload.transactionId,
+            meterStop: 5000,
+            timestamp: new Date().toISOString(),
+            idTag: 'USER001',
+            reason: 'Remote'
+          });
+        }, 1000);
+      }
+      
+    } else if (messageType === 3) { // CallResult
       console.log(`  ← Response: SUCCESS`);
-      console.log(`     Data:`, JSON.stringify(payload, null, 2));
+      console.log(`     Data:`, JSON.stringify(actionOrPayload, null, 2));
       
       // Capture transaction ID
-      if (payload.transactionId) {
-        transactionId = payload.transactionId;
+      if (actionOrPayload.transactionId) {
+        transactionId = actionOrPayload.transactionId;
         console.log(`     💾 Saved Transaction ID: ${transactionId}`);
       }
     } else if (messageType === 4) { // CallError
       console.log(`  ← Response: ERROR`);
-      console.log(`     Code: ${payload}`);
-      console.log(`     Description:`, msg[3]);
+      console.log(`     Code: ${actionOrPayload}`);
+      console.log(`     Description:`, payload);
     }
   });
   

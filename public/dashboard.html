@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>OCPP Charging Station Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <style>
         * {
             margin: 0;
@@ -211,6 +212,140 @@
             font-size: 0.9em;
             margin-top: 20px;
         }
+
+        .charts-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .chart-container {
+            background: white;
+            padding: 25px;
+            border-radius: 15px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+            position: relative;
+            height: 350px;
+        }
+
+        .chart-container h3 {
+            color: #667eea;
+            margin-bottom: 20px;
+            font-size: 1.2em;
+        }
+
+        .chart-wrapper {
+            position: relative;
+            height: calc(100% - 50px);
+        }
+
+        .two-column-charts {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .remote-control-panel {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 25px;
+        }
+
+        .control-form {
+            background: linear-gradient(135deg, #f5f7fa 0%, #fff 100%);
+            padding: 20px;
+            border-radius: 10px;
+            border: 2px solid #e0e0e0;
+        }
+
+        .control-form h3 {
+            color: #667eea;
+            margin-bottom: 15px;
+            font-size: 1.1em;
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            color: #555;
+            font-weight: 600;
+            font-size: 0.9em;
+        }
+
+        .form-group input {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 1em;
+            box-sizing: border-box;
+        }
+
+        .form-group input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .btn {
+            padding: 12px 25px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 1em;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            width: 100%;
+            margin-top: 10px;
+        }
+
+        .btn-success {
+            background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+            color: white;
+        }
+
+        .btn-success:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(17, 153, 142, 0.4);
+        }
+
+        .btn-danger {
+            background: linear-gradient(135deg, #eb3349 0%, #f45c43 100%);
+            color: white;
+        }
+
+        .btn-danger:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(235, 51, 73, 0.4);
+        }
+
+        .result-message {
+            margin-top: 15px;
+            padding: 12px;
+            border-radius: 5px;
+            font-size: 0.9em;
+            display: none;
+        }
+
+        .result-message.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+            display: block;
+        }
+
+        .result-message.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+            display: block;
+        }
     </style>
 </head>
 <body>
@@ -226,10 +361,63 @@
             <div class="loading">Loading statistics...</div>
         </div>
 
+        <div class="two-column-charts">
+            <div class="chart-container">
+                <h3>📈 Energy Consumption Over Time</h3>
+                <div class="chart-wrapper">
+                    <canvas id="energyChart"></canvas>
+                </div>
+            </div>
+            
+            <div class="chart-container">
+                <h3>📊 Energy by Charger</h3>
+                <div class="chart-wrapper">
+                    <canvas id="chargerChart"></canvas>
+                </div>
+            </div>
+        </div>
+
         <div class="section">
             <h2>📊 Recent Chargers</h2>
             <div id="chargers">
                 <div class="loading">Loading chargers...</div>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>🎮 Remote Control</h2>
+            <div class="remote-control-panel">
+                <div class="control-form">
+                    <h3>Remote Start Transaction</h3>
+                    <div class="form-group">
+                        <label>Charger ID:</label>
+                        <input type="text" id="start-charger-id" placeholder="e.g., SIMULATOR_CP01" />
+                    </div>
+                    <div class="form-group">
+                        <label>Connector ID:</label>
+                        <input type="number" id="start-connector-id" value="1" min="1" />
+                    </div>
+                    <div class="form-group">
+                        <label>ID Tag (User):</label>
+                        <input type="text" id="start-id-tag" placeholder="e.g., USER001" />
+                    </div>
+                    <button class="btn btn-success" onclick="remoteStartTransaction()">▶️ Start Charging</button>
+                    <div id="start-result" class="result-message"></div>
+                </div>
+
+                <div class="control-form">
+                    <h3>Remote Stop Transaction</h3>
+                    <div class="form-group">
+                        <label>Charger ID:</label>
+                        <input type="text" id="stop-charger-id" placeholder="e.g., SIMULATOR_CP01" />
+                    </div>
+                    <div class="form-group">
+                        <label>Transaction ID:</label>
+                        <input type="number" id="stop-transaction-id" placeholder="e.g., 1" />
+                    </div>
+                    <button class="btn btn-danger" onclick="remoteStopTransaction()">⏹️ Stop Charging</button>
+                    <div id="stop-result" class="result-message"></div>
+                </div>
             </div>
         </div>
 
@@ -268,17 +456,233 @@
     </div>
 
     <script>
+        // Chart instances
+        let energyChart = null;
+        let statusChart = null;
+        let chargerChart = null;
+
         function formatDate(dateString) {
             if (!dateString) return 'N/A';
             const date = new Date(dateString);
             return date.toLocaleString();
         }
-
         function formatEnergy(wh) {
             if (!wh || wh === 0) return '0 Wh';
             if (wh >= 1000000) return (wh / 1000000).toFixed(2) + ' MWh';
             if (wh >= 1000) return (wh / 1000).toFixed(2) + ' kWh';
             return wh + ' Wh';
+        }
+
+        // Remote Control Functions
+        async function remoteStartTransaction() {
+            const chargePointId = document.getElementById('start-charger-id').value.trim();
+            const connectorId = document.getElementById('start-connector-id').value;
+            const idTag = document.getElementById('start-id-tag').value.trim();
+            const resultDiv = document.getElementById('start-result');
+
+            if (!chargePointId || !connectorId || !idTag) {
+                resultDiv.className = 'result-message error';
+                resultDiv.textContent = '❌ Please fill in all fields';
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/remote-start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ chargePointId, connectorId, idTag })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    resultDiv.className = 'result-message success';
+                    resultDiv.textContent = `✅ Remote start ${data.result.status}: ${JSON.stringify(data.result)}`;
+                    // Refresh active transactions after a delay
+                    setTimeout(loadAllData, 2000);
+                } else {
+                    resultDiv.className = 'result-message error';
+                    resultDiv.textContent = `❌ Error: ${data.error}`;
+                }
+            } catch (err) {
+                resultDiv.className = 'result-message error';
+                resultDiv.textContent = `❌ Request failed: ${err.message}`;
+            }
+        }
+
+        async function remoteStopTransaction() {
+            const chargePointId = document.getElementById('stop-charger-id').value.trim();
+            const transactionId = document.getElementById('stop-transaction-id').value;
+            const resultDiv = document.getElementById('stop-result');
+
+            if (!chargePointId || !transactionId) {
+                resultDiv.className = 'result-message error';
+                resultDiv.textContent = '❌ Please fill in all fields';
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/remote-stop', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ chargePointId, transactionId })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    resultDiv.className = 'result-message success';
+                    resultDiv.textContent = `✅ Remote stop ${data.result.status}: ${JSON.stringify(data.result)}`;
+                    // Refresh active transactions after a delay
+                    setTimeout(loadAllData, 2000);
+                } else {
+                    resultDiv.className = 'result-message error';
+                    resultDiv.textContent = `❌ Error: ${data.error}`;
+                }
+            } catch (err) {
+                resultDiv.className = 'result-message error';
+                resultDiv.textContent = `❌ Request failed: ${err.message}`;
+            }
+        }
+
+        // Initialize charts
+        function initCharts() {
+            // Energy Over Time Chart
+            const energyCtx = document.getElementById('energyChart').getContext('2d');
+            energyChart = new Chart(energyCtx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Energy Consumed (kWh)',
+                        data: [],
+                        borderColor: '#667eea',
+                        backgroundColor: 'rgba(102, 126, 234, 0.1)',
+                        tension: 0.4,
+                        fill: true,
+                        pointRadius: 5,
+                        pointHoverRadius: 7
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: true },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    return context.dataset.label + ': ' + context.parsed.y.toFixed(2) + ' kWh';
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            title: { display: true, text: 'Energy (kWh)' }
+                        },
+                        x: {
+                            title: { display: true, text: 'Time' }
+                        }
+                    }
+                }
+            });
+
+            // Status Distribution Chart
+            const chargerCtx = document.getElementById('chargerChart').getContext('2d');
+            chargerChart = new Chart(chargerCtx, {
+                type: 'bar',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Total Energy (kWh)',
+                        data: [],
+                        backgroundColor: [
+                            'rgba(255, 99, 132, 0.8)',
+                            'rgba(54, 162, 235, 0.8)',
+                            'rgba(255, 206, 86, 0.8)',
+                            'rgba(75, 192, 192, 0.8)',
+                            'rgba(153, 102, 255, 0.8)'
+                        ],
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            title: { display: true, text: 'Energy (kWh)' }
+                        }
+                    }
+                }
+            });
+        }
+
+        async function updateEnergyChart() {
+            try {
+                const response = await fetch('/api/transactions?limit=20');
+                const data = await response.json();
+                
+                // Process transactions for timeline
+                const timeline = data.transactions
+                    .filter(tx => tx.meter_stop !== null && tx.meter_start !== null)
+                    .sort((a, b) => new Date(a.stop_timestamp) - new Date(b.stop_timestamp))
+                    .map(tx => ({
+                        time: new Date(tx.stop_timestamp).toLocaleTimeString(),
+                        energy: (tx.meter_stop - tx.meter_start) / 1000, // Convert to kWh
+                        txId: tx.id,
+                        charger: tx.charge_point_id
+                    }));
+
+                energyChart.data.labels = timeline.map(t => t.time);
+                energyChart.data.datasets[0].data = timeline.map(t => t.energy);
+                energyChart.update();
+
+                // Debug: Log chart data to console for verification
+                console.log('📈 Energy Chart Data:', {
+                    transactions: timeline.length,
+                    data: timeline
+                });
+            } catch (err) {
+                console.error('Error updating energy chart:', err);
+            }
+        }
+
+        async function updateChargerChart() {
+            try {
+                const response = await fetch('/api/transactions');
+                const data = await response.json();
+                
+                // Aggregate energy by charger
+                const chargerEnergy = {};
+                data.transactions
+                    .filter(tx => tx.meter_stop !== null && tx.meter_start !== null)
+                    .forEach(tx => {
+                        const energy = (tx.meter_stop - tx.meter_start) / 1000; // kWh
+                        chargerEnergy[tx.charge_point_id] = (chargerEnergy[tx.charge_point_id] || 0) + energy;
+                    });
+
+                const chargers = Object.keys(chargerEnergy);
+                const energies = Object.values(chargerEnergy);
+
+                chargerChart.data.labels = chargers.map(c => c.length > 15 ? c.substring(0, 15) + '...' : c);
+                chargerChart.data.datasets[0].data = energies;
+                chargerChart.update();
+
+                // Debug: Log chart data to console for verification
+                console.log('📊 Charger Chart Data:', {
+                    chargers: chargers.length,
+                    data: chargers.map((name, i) => ({ charger: name, energy: energies[i].toFixed(2) + ' kWh' }))
+                });
+            } catch (err) {
+                console.error('Error updating charger chart:', err);
+            }
         }
 
         async function loadDashboardStats() {
@@ -504,12 +908,21 @@
             loadTransactions();
             loadStatusNotifications();
             
+            // Update charts
+            if (energyChart && chargerChart) {
+                updateEnergyChart();
+                updateChargerChart();
+            }
+            
             const now = new Date().toLocaleString();
             document.getElementById('last-updated').textContent = `Last updated: ${now}`;
         }
 
-        // Load data on page load
-        loadAllData();
+        // Initialize charts and load data on page load
+        document.addEventListener('DOMContentLoaded', () => {
+            initCharts();
+            loadAllData();
+        });
 
         // Auto-refresh every 10 seconds
         setInterval(loadAllData, 10000);

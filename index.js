@@ -129,7 +129,7 @@ app.get("/api/dashboard", async (req, res) => {
       "SELECT COUNT(*) as count FROM transactions WHERE status = 'Stopped'"
     );
     const totalEnergy = await dbGet(
-      "SELECT SUM(meter_stop - meter_start) as total FROM transactions WHERE meter_stop IS NOT NULL"
+      "SELECT COALESCE(SUM(CAST(meter_stop AS INTEGER) - CAST(meter_start AS INTEGER)), 0) as total FROM transactions WHERE meter_stop IS NOT NULL AND meter_start IS NOT NULL"
     );
     const recentChargers = await dbAll(
       "SELECT id, vendor, model, last_seen FROM chargers ORDER BY last_seen DESC LIMIT 5"
@@ -149,6 +149,54 @@ app.get("/api/dashboard", async (req, res) => {
   }
 });
 
+// 9. Analytics endpoint for charts
+app.get("/api/analytics", async (req, res) => {
+  try {
+    // Energy by charger
+    const energyByCharger = await dbAll(`
+      SELECT 
+        charge_point_id,
+        COUNT(*) as session_count,
+        COALESCE(SUM(CAST(meter_stop AS INTEGER) - CAST(meter_start AS INTEGER)), 0) as total_energy_wh
+      FROM transactions 
+      WHERE meter_stop IS NOT NULL AND meter_start IS NOT NULL
+      GROUP BY charge_point_id
+      ORDER BY total_energy_wh DESC
+    `);
+
+    // Transactions timeline (last 24 hours)
+    const timeline = await dbAll(`
+      SELECT 
+        id,
+        charge_point_id,
+        CAST(meter_stop AS INTEGER) - CAST(meter_start AS INTEGER) as energy_wh,
+        start_timestamp,
+        stop_timestamp,
+        status
+      FROM transactions 
+      WHERE meter_stop IS NOT NULL AND meter_start IS NOT NULL
+      ORDER BY stop_timestamp DESC
+      LIMIT 50
+    `);
+
+    // Status distribution
+    const statusDist = await dbAll(`
+      SELECT status, COUNT(*) as count
+      FROM transactions
+      GROUP BY status
+    `);
+
+    res.json({
+      energyByCharger,
+      timeline,
+      statusDistribution: statusDist
+    });
+  } catch (err) {
+    log("error", "API error /api/analytics:", err.message);
+    res.status(500).json({ error: "Database error" });
+  }
+});
+
 // Serve static files from public directory
 app.use(express.static('public'));
 
@@ -159,8 +207,11 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
 const state = {
-  activeTransactions: new Map()
+  activeTransactions: new Map(),
+  connectedChargers: new Map() // Store active WebSocket connections
 };
+
+let callMessageId = 1; // Counter for CALL messages from server
 
 const db = new sqlite3.Database("ocpp.db");
 
@@ -258,9 +309,106 @@ function getChargePointId(req) {
   return id || "unknown";
 }
 
+// Helper function to send CALL messages to charge points
+function sendCallToCharger(chargePointId, action, payload) {
+  return new Promise((resolve, reject) => {
+    const ws = state.connectedChargers.get(chargePointId);
+    
+    if (!ws || ws.readyState !== 1) { // 1 = OPEN
+      reject(new Error(`Charger ${chargePointId} not connected`));
+      return;
+    }
+
+    const msgId = String(callMessageId++);
+    const message = [2, msgId, action, payload];
+
+    // Set up response handler with timeout
+    const timeout = setTimeout(() => {
+      ws.removeEventListener('message', messageHandler);
+      reject(new Error('Request timeout'));
+    }, 30000); // 30 second timeout
+
+    const messageHandler = (event) => {
+      try {
+        const response = JSON.parse(event.data.toString());
+        const [messageType, responseId, responsePayload] = response;
+
+        if (responseId === msgId) {
+          clearTimeout(timeout);
+          ws.removeEventListener('message', messageHandler);
+
+          if (messageType === 3) { // CALLRESULT
+            resolve(responsePayload);
+          } else if (messageType === 4) { // CALLERROR
+            reject(new Error(`OCPP Error: ${response[2]} - ${response[3]}`));
+          }
+        }
+      } catch (err) {
+        // Ignore parsing errors for other messages
+      }
+    };
+
+    ws.addEventListener('message', messageHandler);
+    ws.send(JSON.stringify(message));
+    log("info", `Sent ${action} to ${chargePointId}, msgId: ${msgId}`);
+  });
+}
+
+// Remote Start Transaction API
+app.post("/api/remote-start", async (req, res) => {
+  try {
+    const { chargePointId, connectorId, idTag } = req.body;
+
+    if (!chargePointId || !connectorId || !idTag) {
+      return res.status(400).json({ 
+        success: false, 
+        error: "Missing required fields: chargePointId, connectorId, idTag" 
+      });
+    }
+
+    const result = await sendCallToCharger(chargePointId, "RemoteStartTransaction", {
+      connectorId: parseInt(connectorId),
+      idTag: idTag
+    });
+
+    log("info", `RemoteStartTransaction result for ${chargePointId}:`, result);
+    res.json({ success: true, result });
+  } catch (err) {
+    log("error", "RemoteStartTransaction error:", err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Remote Stop Transaction API
+app.post("/api/remote-stop", async (req, res) => {
+  try {
+    const { chargePointId, transactionId } = req.body;
+
+    if (!chargePointId || !transactionId) {
+      return res.status(400).json({ 
+        success: false, 
+        error: "Missing required fields: chargePointId, transactionId" 
+      });
+    }
+
+    const result = await sendCallToCharger(chargePointId, "RemoteStopTransaction", {
+      transactionId: parseInt(transactionId)
+    });
+
+    log("info", `RemoteStopTransaction result for ${chargePointId}:`, result);
+    res.json({ success: true, result });
+  } catch (err) {
+    log("error", "RemoteStopTransaction error:", err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 wss.on("connection", (ws, req) => {
   const chargePointId = getChargePointId(req);
   log("info", "Charge Point connected:", chargePointId);
+
+  // Store the connection
+  state.connectedChargers.set(chargePointId, ws);
 
   ws.on("message", async (message) => {
     let ocpp;
@@ -386,9 +534,9 @@ wss.on("connection", (ws, req) => {
             "INSERT INTO transactions (charge_point_id, connector_id, id_tag, meter_start, start_timestamp, status) VALUES (?, ?, ?, ?, ?, ?)",
             [
               chargePointId,
-              payload?.connectorId || null,
-              payload?.idTag || null,
-              payload?.meterStart || null,
+              payload?.connectorId ?? null,
+              payload?.idTag ?? null,
+              payload?.meterStart ?? null,
               payload?.timestamp || now,
               "Active"
             ]
@@ -428,7 +576,7 @@ wss.on("connection", (ws, req) => {
           }
           await dbRun(
             "UPDATE transactions SET status = ?, meter_stop = ?, stop_timestamp = ? WHERE id = ?",
-            ["Stopped", payload?.meterStop || null, payload?.timestamp || now, txId]
+            ["Stopped", payload?.meterStop ?? null, payload?.timestamp || now, txId]
           );
         } catch (err) {
           log("error", "DB error StopTransaction:", err.message);
@@ -460,7 +608,7 @@ wss.on("connection", (ws, req) => {
             "INSERT INTO status_notifications (charge_point_id, connector_id, status, error_code, timestamp) VALUES (?, ?, ?, ?, ?)",
             [
               chargePointId,
-              payload?.connectorId || 0,
+              payload?.connectorId ?? 0,
               payload?.status || "Unknown",
               payload?.errorCode || "NoError",
               payload?.timestamp || now
@@ -491,9 +639,9 @@ wss.on("connection", (ws, req) => {
             "INSERT INTO meter_values (charge_point_id, connector_id, transaction_id, meter_value, timestamp) VALUES (?, ?, ?, ?, ?)",
             [
               chargePointId,
-              payload?.connectorId || 0,
-              payload?.transactionId || null,
-              JSON.stringify(payload?.meterValue || []),
+              payload?.connectorId ?? 0,
+              payload?.transactionId ?? null,
+              JSON.stringify(payload?.meterValue ?? []),
               now
             ]
           );
@@ -516,7 +664,10 @@ wss.on("connection", (ws, req) => {
     }
   });
 
-  ws.on("close", () => log("info", "Charge Point disconnected:", chargePointId));
+  ws.on("close", () => {
+    state.connectedChargers.delete(chargePointId);
+    log("info", "Charge Point disconnected:", chargePointId);
+  });
 });
 
 initDb()
@@ -535,6 +686,7 @@ server.listen(PORT, () => {
   
   📡 API Endpoints:
      GET  /api/dashboard          - System overview
+     GET  /api/analytics          - Chart analytics data
      GET  /api/chargers           - List all chargers  
      GET  /api/chargers/:id       - Get charger details
      GET  /api/transactions       - List transactions
