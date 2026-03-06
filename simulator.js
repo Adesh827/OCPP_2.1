@@ -1,6 +1,15 @@
 import WebSocket from 'ws';
+import fs from 'fs';
 
-const SERVER_URL = 'ws://localhost:8080/SIMULATOR_CP01';
+const SERVER_URL = 'wss://localhost:8443/SIMULATOR_CP01';
+
+// TLS/SSL options for secure WebSocket connection
+const wsOptions = {
+  key: fs.readFileSync('./certs/client-key.pem'),
+  cert: fs.readFileSync('./certs/client-cert.pem'),
+  ca: fs.readFileSync('./certs/ca-cert.pem'),
+  rejectUnauthorized: false // Allow self-signed certificates
+};
 let messageId = 1;
 let ws;
 let transactionId = null;
@@ -14,11 +23,12 @@ function sendMessage(action, payload) {
 
 function simulateChargingSession() {
   console.log('╔═══════════════════════════════════════════════════════════╗');
-  console.log('║         OCPP Charge Point Simulator                      ║');
+  console.log('║    OCPP Charge Point Simulator (TLS Enabled)             ║');
   console.log('╚═══════════════════════════════════════════════════════════╝\n');
-  console.log(`Connecting to: ${SERVER_URL}\n`);
+  console.log(`Connecting to: ${SERVER_URL}`);
+  console.log('🔒 Security: TLS/SSL Enabled (WSS)\n');
 
-  ws = new WebSocket(SERVER_URL);
+  ws = new WebSocket(SERVER_URL, wsOptions);
   
   ws.on('open', () => {
     console.log('✅ Connected to OCPP Server\n');

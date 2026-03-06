@@ -1,6 +1,6 @@
 import WebSocket from 'ws';
 
-const SERVER_URL = 'ws://localhost:8080/TEST_REMOTE_CP';
+const SERVER_URL = 'ws://localhost:8080/SIMULATOR_CP01';
 let messageId = 1;
 let ws;
 let transactionId = null;

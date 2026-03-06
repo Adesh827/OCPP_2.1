@@ -1,10 +1,21 @@
 import express from "express";
-import http from "http";
+import https from "https";
+import fs from "fs";
 import { WebSocketServer } from "ws";
 import sqlite3 from "sqlite3";
 
 const app = express();
-const PORT = process.env.PORT || 8080; // Render uses environment PORT
+const PORT = process.env.PORT || 8443; // HTTPS port for secure connection
+
+// Load SSL/TLS certificates
+const serverOptions = {
+  key: fs.readFileSync('./certs/server-key.pem'),
+  cert: fs.readFileSync('./certs/server-cert.pem'),
+  // Optional: Enable client certificate authentication
+  requestCert: false, // Set to true for mutual TLS
+  rejectUnauthorized: false, // Allow self-signed certificates for development
+  ca: fs.existsSync('./certs/ca-cert.pem') ? [fs.readFileSync('./certs/ca-cert.pem')] : []
+};
 
 app.use(express.json());
 
@@ -197,19 +208,86 @@ app.get("/api/analytics", async (req, res) => {
   }
 });
 
+// 10. Connected chargers endpoint (real-time WebSocket connections)
+app.get("/api/connected-chargers", async (req, res) => {
+  try {
+    const connectedChargers = [];
+    
+    for (const [chargePointId, ws] of state.connectedChargers.entries()) {
+      // Get charger info from database
+      const chargerInfo = await dbGet("SELECT * FROM chargers WHERE id = ?", [chargePointId]);
+      
+      connectedChargers.push({
+        id: chargePointId,
+        vendor: chargerInfo?.vendor || "Unknown",
+        model: chargerInfo?.model || "Unknown",
+        lastSeen: chargerInfo?.last_seen || new Date().toISOString(),
+        connectionState: ws.readyState === 1 ? "CONNECTED" : "DISCONNECTED",
+        readyState: ws.readyState,
+        connectedSince: chargerInfo?.last_seen || "N/A"
+      });
+    }
+    
+    res.json({ 
+      count: connectedChargers.length, 
+      connectedChargers,
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    log("error", "API error /api/connected-chargers:", err.message);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// 11. OCPP Messages endpoint (for protocol monitoring)
+app.get("/api/ocpp-messages", (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 50;
+    const messages = state.ocppMessages.slice(0, limit);
+    
+    // Calculate OCPP statistics
+    const stats = {
+      totalMessages: state.ocppMessages.length,
+      incoming: state.ocppMessages.filter(m => m.direction === "incoming").length,
+      outgoing: state.ocppMessages.filter(m => m.direction === "outgoing").length,
+      byAction: {}
+    };
+    
+    // Count messages by action
+    state.ocppMessages.forEach(msg => {
+      if (msg.action && msg.action !== "N/A") {
+        stats.byAction[msg.action] = (stats.byAction[msg.action] || 0) + 1;
+      }
+    });
+    
+    res.json({ 
+      count: messages.length,
+      messages,
+      statistics: stats,
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    log("error", "API error /api/ocpp-messages:", err.message);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
 // Serve static files from public directory
 app.use(express.static('public'));
 
-// HTTP server (not HTTPS, Render terminates TLS)
-const server = http.createServer(app);
+// HTTPS server with TLS/SSL certificates
+const server = https.createServer(serverOptions, app);
 
-// WebSocket server attached to HTTP server
+// Secure WebSocket server (WSS) attached to HTTPS server
 const wss = new WebSocketServer({ server });
 
 const state = {
   activeTransactions: new Map(),
-  connectedChargers: new Map() // Store active WebSocket connections
+  connectedChargers: new Map(), // Store active WebSocket connections
+  ocppMessages: [] // Store recent OCPP messages for monitoring
 };
+
+const MAX_OCPP_MESSAGES = 100; // Keep last 100 messages
 
 let callMessageId = 1; // Counter for CALL messages from server
 
@@ -280,12 +358,57 @@ function log(level, ...args) {
   console.log(`[${ts}] [${level.toUpperCase()}]`, ...args);
 }
 
-function sendCallResult(ws, messageId, payload) {
-  ws.send(JSON.stringify([3, messageId, payload]));
+// Log OCPP messages for monitoring
+function logOcppMessage(direction, chargePointId, messageType, messageId, action, payload) {
+  const messageTypeNames = {
+    2: "CALL",
+    3: "CALLRESULT",
+    4: "CALLERROR"
+  };
+
+  const logEntry = {
+    timestamp: new Date().toISOString(),
+    direction, // "incoming" or "outgoing"
+    chargePointId,
+    messageType: messageTypeNames[messageType] || `Type-${messageType}`,
+    messageTypeCode: messageType,
+    messageId,
+    action: action || "N/A",
+    payload: payload || {},
+    rawMessage: [messageType, messageId, action, payload].filter(x => x !== undefined)
+  };
+
+  state.ocppMessages.unshift(logEntry); // Add to beginning
+  
+  // Keep only last MAX_OCPP_MESSAGES
+  if (state.ocppMessages.length > MAX_OCPP_MESSAGES) {
+    state.ocppMessages = state.ocppMessages.slice(0, MAX_OCPP_MESSAGES);
+  }
+
+  // Enhanced console logging with colors (for terminal visibility)
+  const arrow = direction === "incoming" ? "📥" : "📤";
+  const typeColor = messageType === 2 ? "CALL" : messageType === 3 ? "RESULT" : "ERROR";
+  log("info", `${arrow} [${typeColor}] ${chargePointId} | ${action || 'N/A'} | ID: ${messageId}`);
 }
 
-function sendCallError(ws, messageId, errorCode, errorDescription, errorDetails = {}) {
-  ws.send(JSON.stringify([4, messageId, errorCode, errorDescription, errorDetails]));
+function sendCallResult(ws, messageId, payload, chargePointId = "unknown", action = "") {
+  const message = [3, messageId, payload];
+  ws.send(JSON.stringify(message));
+  
+  // Log outgoing CALLRESULT
+  if (chargePointId !== "unknown") {
+    logOcppMessage("outgoing", chargePointId, 3, messageId, action, payload);
+  }
+}
+
+function sendCallError(ws, messageId, errorCode, errorDescription, errorDetails = {}, chargePointId = "unknown") {
+  const message = [4, messageId, errorCode, errorDescription, errorDetails];
+  ws.send(JSON.stringify(message));
+  
+  // Log outgoing CALLERROR
+  if (chargePointId !== "unknown") {
+    logOcppMessage("outgoing", chargePointId, 4, messageId, `ERROR: ${errorCode}`, { errorCode, errorDescription, errorDetails });
+  }
 }
 
 function isNonEmptyString(value) {
@@ -404,8 +527,9 @@ app.post("/api/remote-stop", async (req, res) => {
 });
 
 wss.on("connection", (ws, req) => {
+
   const chargePointId = getChargePointId(req);
-  log("info", "Charge Point connected:", chargePointId);
+  log("info", "Charge Point connected:...........", chargePointId);
 
   // Store the connection
   state.connectedChargers.set(chargePointId, ws);
@@ -426,6 +550,11 @@ wss.on("connection", (ws, req) => {
 
     const [messageType, messageId, action, payload] = ocpp;
 
+    // Log incoming OCPP message
+    if (messageType === 2) { // CALL message
+      logOcppMessage("incoming", chargePointId, messageType, messageId, action, payload);
+    }
+
     // Only handle CALL messages (2)
     if (messageType !== 2) {
       log("debug", "Ignoring non-CALL message type:", messageType);
@@ -433,7 +562,7 @@ wss.on("connection", (ws, req) => {
     }
 
     if (!isNonEmptyString(messageId) || !isNonEmptyString(action)) {
-      sendCallError(ws, messageId || "unknown", "FormationViolation", "Invalid messageId or action");
+      sendCallError(ws, messageId || "unknown", "FormationViolation", "Invalid messageId or action", {}, chargePointId);
       return;
     }
 
@@ -455,7 +584,7 @@ wss.on("connection", (ws, req) => {
           );
         } catch (err) {
           log("error", "DB error BootNotification:", err.message);
-          sendCallError(ws, messageId, "InternalError", "Database error");
+          sendCallError(ws, messageId, "InternalError", "Database error", {}, chargePointId);
           break;
         }
 
@@ -463,7 +592,7 @@ wss.on("connection", (ws, req) => {
           currentTime: now,
           interval: 50,
           status: "Accepted"
-        });
+        }, chargePointId, "BootNotification");
         log("info", "BootNotification handled for", chargePointId);
         break;
       }
@@ -473,12 +602,12 @@ wss.on("connection", (ws, req) => {
           await dbRun("UPDATE chargers SET last_seen = ? WHERE id = ?", [now, chargePointId]);
         } catch (err) {
           log("error", "DB error Heartbeat:", err.message);
-          sendCallError(ws, messageId, "InternalError", "Database error");
+          sendCallError(ws, messageId, "InternalError", "Database error", {}, chargePointId);
           break;
         }
         sendCallResult(ws, messageId, {
           currentTime: now
-        });
+        }, chargePointId, "Heartbeat");
         log("info", "Heartbeat handled for", chargePointId);
         break;
       }
@@ -498,10 +627,10 @@ wss.on("connection", (ws, req) => {
           );
           sendCallResult(ws, messageId, {
             idTagInfo: { status: "Accepted" }
-          });
+          }, chargePointId, "Authorize");
         } catch (err) {
           log("error", "DB error Authorize:", err.message);
-          sendCallError(ws, messageId, "InternalError", "Database error");
+          sendCallError(ws, messageId, "InternalError", "Database error", {}, chargePointId);
           break;
         }
         log("info", "Authorize handled for", chargePointId);
@@ -513,18 +642,18 @@ wss.on("connection", (ws, req) => {
         if (missing.length > 0) {
           sendCallError(ws, messageId, "PropertyConstraintViolation", "Missing required fields", {
             missing
-          });
+          }, chargePointId);
           break;
         }
 
         if (!isNumber(payload?.connectorId)) {
-          sendCallError(ws, messageId, "PropertyConstraintViolation", "connectorId must be a number");
+          sendCallError(ws, messageId, "PropertyConstraintViolation", "connectorId must be a number", {}, chargePointId);
           break;
         }
 
         const connectorKey = `${chargePointId}:${payload.connectorId}`;
         if (state.activeTransactions.has(connectorKey)) {
-          sendCallError(ws, messageId, "OccurrenceConstraintViolation", "Active transaction exists for connector");
+          sendCallError(ws, messageId, "OccurrenceConstraintViolation", "Active transaction exists for connector", {}, chargePointId);
           break;
         }
 
@@ -545,14 +674,14 @@ wss.on("connection", (ws, req) => {
           state.activeTransactions.set(connectorKey, transactionId);
         } catch (err) {
           log("error", "DB error StartTransaction:", err.message);
-          sendCallError(ws, messageId, "InternalError", "Database error");
+          sendCallError(ws, messageId, "InternalError", "Database error", {}, chargePointId);
           break;
         }
 
         sendCallResult(ws, messageId, {
           transactionId,
           idTagInfo: { status: "Accepted" }
-        });
+        }, chargePointId, "StartTransaction");
         log("info", "StartTransaction handled for", chargePointId, "tx", transactionId);
         break;
       }
@@ -562,7 +691,7 @@ wss.on("connection", (ws, req) => {
         if (missing.length > 0) {
           sendCallError(ws, messageId, "PropertyConstraintViolation", "Missing required fields", {
             missing
-          });
+          }, chargePointId);
           break;
         }
 
@@ -571,7 +700,7 @@ wss.on("connection", (ws, req) => {
         try {
           tx = await dbGet("SELECT * FROM transactions WHERE id = ?", [txId]);
           if (!tx || tx.status !== "Active") {
-            sendCallError(ws, messageId, "OccurrenceConstraintViolation", "Unknown or inactive transaction");
+            sendCallError(ws, messageId, "OccurrenceConstraintViolation", "Unknown or inactive transaction", {}, chargePointId);
             break;
           }
           await dbRun(
@@ -580,7 +709,7 @@ wss.on("connection", (ws, req) => {
           );
         } catch (err) {
           log("error", "DB error StopTransaction:", err.message);
-          sendCallError(ws, messageId, "InternalError", "Database error");
+          sendCallError(ws, messageId, "InternalError", "Database error", {}, chargePointId);
           break;
         }
 
@@ -589,7 +718,7 @@ wss.on("connection", (ws, req) => {
 
         sendCallResult(ws, messageId, {
           idTagInfo: { status: "Accepted" }
-        });
+        }, chargePointId, "StopTransaction");
         log("info", "StopTransaction handled for", chargePointId, "tx", txId);
         break;
       }
@@ -599,7 +728,7 @@ wss.on("connection", (ws, req) => {
         if (missing.length > 0) {
           sendCallError(ws, messageId, "PropertyConstraintViolation", "Missing required fields", {
             missing
-          });
+          }, chargePointId);
           break;
         }
 
@@ -616,11 +745,11 @@ wss.on("connection", (ws, req) => {
           );
         } catch (err) {
           log("error", "DB error StatusNotification:", err.message);
-          sendCallError(ws, messageId, "InternalError", "Database error");
+          sendCallError(ws, messageId, "InternalError", "Database error", {}, chargePointId);
           break;
         }
 
-        sendCallResult(ws, messageId, {});
+        sendCallResult(ws, messageId, {}, chargePointId, "StatusNotification");
         log("info", "StatusNotification handled for", chargePointId);
         break;
       }
@@ -630,7 +759,7 @@ wss.on("connection", (ws, req) => {
         if (missing.length > 0) {
           sendCallError(ws, messageId, "PropertyConstraintViolation", "Missing required fields", {
             missing
-          });
+          }, chargePointId);
           break;
         }
 
@@ -647,17 +776,17 @@ wss.on("connection", (ws, req) => {
           );
         } catch (err) {
           log("error", "DB error MeterValues:", err.message);
-          sendCallError(ws, messageId, "InternalError", "Database error");
+          sendCallError(ws, messageId, "InternalError", "Database error", {}, chargePointId);
           break;
         }
 
-        sendCallResult(ws, messageId, {});
+        sendCallResult(ws, messageId, {}, chargePointId, "MeterValues");
         log("info", "MeterValues handled for", chargePointId);
         break;
       }
 
       default: {
-        sendCallError(ws, messageId, "NotSupported", `Action ${action} not supported`);
+        sendCallError(ws, messageId, "NotSupported", `Action ${action} not supported`, {}, chargePointId);
         log("warn", "Unsupported action:", action);
         break;
       }
@@ -677,12 +806,15 @@ initDb()
 server.listen(PORT, () => {
   console.log(`
 ╔═══════════════════════════════════════════════════════════╗
-║         OCPP 1.6 WebSocket Server Running                 ║
+║    OCPP 1.6 Secure WebSocket Server Running (TLS)        ║
 ╚═══════════════════════════════════════════════════════════╝
 
-  🌐 Web Server:        http://localhost:${PORT}
-  🔌 WebSocket Endpoint: ws://localhost:${PORT}/<ChargePointID>
-  📊 Dashboard:          http://localhost:${PORT}/dashboard.html
+  🔒 Web Server:        https://localhost:${PORT}
+  🔌 WebSocket Endpoint: wss://localhost:${PORT}/<ChargePointID>
+  📊 Dashboard:          https://localhost:${PORT}/dashboard.html
+  
+  🔐 Security:           TLS/SSL Enabled (HTTPS + WSS)
+  📜 Certificate:        ./certs/server-cert.pem
   
   📡 API Endpoints:
      GET  /api/dashboard          - System overview
@@ -694,6 +826,6 @@ server.listen(PORT, () => {
      GET  /api/status             - Status notifications
      GET  /api/meter-values       - Meter readings
 
-  ✅ Server ready to accept connections...
+  ✅ Server ready to accept secure connections...
   `);
 });
