@@ -28,7 +28,7 @@ const chargers = [
 let activeConnections = 0;
 
 function simulateCharger(chargerConfig) {
-  const SERVER_URL = `ws://localhost:8080/${chargerConfig.id}`;
+  const SERVER_URL = `ws://localhost:3030/${chargerConfig.id}`;
   const ws = new WebSocket(SERVER_URL);
   let messageId = 1;
   let transactionId = null;

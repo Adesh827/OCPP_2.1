@@ -135,16 +135,16 @@ function simulateChargingSession() {
     }, 8500);
     
     // Step 10: Stop Transaction
-    setTimeout(() => {
-      console.log('\n🛑 Step 10: Stopping transaction...');
-      sendMessage('StopTransaction', {
-        transactionId: transactionId || 1,
-        meterStop: 5000,
-        timestamp: new Date().toISOString(),
-        idTag: 'USER001',
-        reason: 'Local'
-      });
-    }, 9500);
+    // setTimeout(() => {
+    //   console.log('\n🛑 Step 10: Stopping transaction...');
+    //   sendMessage('StopTransaction', {
+    //     transactionId: transactionId || 1,
+    //     meterStop: 5000,
+    //     timestamp: new Date().toISOString(),
+    //     idTag: 'USER001',
+    //     reason: 'Local'
+    //   });
+    // }, 9500);
     
     // Step 11: Status Notification - Finishing
     setTimeout(() => {

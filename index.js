@@ -81,7 +81,7 @@ function sendCallToCharger(chargePointId, action, payload) {
   return new Promise((resolve, reject) => {
     const ws = state.connectedChargers.get(chargePointId);
     
-    if (!ws || ws.readyState !== 1) { // 1 = OPEN
+    if (!ws) { // 1 = OPEN  || ws.readyState !== 1
       reject(new Error(`Charger ${chargePointId} not connected`));
       return;
     }
@@ -431,10 +431,10 @@ wss.on("connection", (ws, req) => {
     }
   });
 
-  ws.on("close", () => {
-    state.connectedChargers.delete(chargePointId);
-    log("info", "Charge Point disconnected:", chargePointId);
-  });
+  // ws.on("close", () => {
+  //   state.connectedChargers.delete(chargePointId);
+  //   log("info", "Charge Point disconnected:", chargePointId);
+  // });
 });
 
 initDb()
